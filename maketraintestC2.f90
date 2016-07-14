@@ -479,10 +479,7 @@ program maketrain
 
   end if
   
-
-  
   call MPI_FINALIZE(ierr)
-  
   stop  
 end program maketrain
 
