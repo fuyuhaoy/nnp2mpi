@@ -1,138 +1,126 @@
-! 2016-7-9
-! add parallel function
+! 2016-7-14
+! Every process have own iostream to the input.data.
+! They only address structures within designated range, and output to temporary files.
+! Lastly, merge temporary files to produce required files
+! Efficiency of program isn't still fast expectingly.
 
 program maketrain
   implicit none
-  
   include '/opt/openmpi-1.6.5/include/mpif.h'
   
-  integer :: i,j,k
-  integer :: nat
+  integer i,j,k
+  integer nat
   parameter (nat=136) ! max number of atoms in structure for dimensioning of arrays
-  integer :: nn       ! number of input nodes
+  integer nn ! number of input nodes
   parameter (nn=56)
-  integer :: counter
-  integer :: ncut
-  integer :: ntest,ntrain,nrej
-  integer :: natom    ! real number of atoms in structure
-  integer :: nexample ! counter of lines in input.data file
-  integer :: ntot     ! number of structrue
-  
-  real(kind=8) :: lattice(3,3)
-  real(kind=8) :: xyz(nat,3)
-  real(kind=8), dimension(:,:), allocatable :: xxyyzz 
-  ! real(kind=8) xxyyzz(27*nat,3)
-  real(kind=8) :: energy,e,diffe,de,ej
-  real(kind=8) :: zran
-  real(kind=8) :: cutoff
-  real(kind=8) :: xx(nn,1,nat)
-  real(kind=8) :: dxdy(nn,nat,nat,3) ! derivatives of symmetry functions with respect to x,y and z
-  real(kind=8) :: strs(3,3,nn,nat)
-  real(kind=8) :: bohr2a,a2bohr
+  integer counter
+  integer ncut
+  integer ntest,ntrain,nrej
+  integer natom ! real number of atoms in structure
+  integer nexample
+  integer ntot
+
+  real*8 lattice(3,3)
+  real*8 xyz(nat,3)
+  real*8,  dimension(:,:), allocatable :: xxyyzz 
+  !real*8 xxyyzz(27*nat,3)
+  real*8 energy,e,diffe,de,ej
+  real*8 zran
+  real*8 cutoff
+  real*8 xx(nn,1,nat)
+  real*8 dxdy(nn,nat,nat,3) ! derivatives of symmetry functions with respect to x,y and z
+  real*8 strs(3,3,nn,nat)
+  real*8 bohr2a,a2bohr
   parameter (bohr2a=0.529177d0)
   parameter (a2bohr=1.8897268d0)
-  real(kind=8) :: ethres 
-  real(kind=8) :: volume, volumemax
-  real(kind=8) :: tempvec(3) 
+  real*8 ethres 
+  real*8 volume, volumemax
+  real*8 tempvec(3) 
   
-  character(len=15) :: cdummy
+  character*15 cdummy
   
-  logical :: ldebug
-  logical :: lforce
-  ! lforce=.true.
-
+  logical ldebug
+  logical lforce
+  !lforce=.true.
+  
   ! --------------------fyuhaoy--------------------
-  integer :: ios ! status when read input.data file
-  
-  integer :: myid, numprocs, structures_per_procs
-  integer :: ierr, status(MPI_STATUS_SIZE), sender
-
-  integer :: structures ! number of vail structures
-
-  ! temporary array
-  real(kind=8), allocatable :: tlattices(:,:,:) ! [structure, abc, xyz]
-  real(kind=8), allocatable :: txyzs(:,:,:)     ! [structure, atom, xyz]
-  real(kind=8), allocatable :: tenergys(:)      ! [structure]
-  real(kind=8), allocatable :: tvolumes(:)      ! [structure]
-  integer, allocatable :: tnatoms(:)            ! [structure]
-  
-  real(kind=8), allocatable :: lattices2(:,:,:) ! [structure, abc, xyz]
-  real(kind=8), allocatable :: xyzs2(:,:,:)     ! [structure, atom, xyz]
-  real(kind=8), allocatable :: energys2(:)      ! [structure]
-  real(kind=8), allocatable :: volumes2(:)      ! [structure]
-  integer, allocatable :: natoms2(:)            ! [structure]
-
-  real(kind=8), allocatable :: sublatts(:,:,:), tsublatts(:) ! [structure, abc, xyz] and [structure*abc*xyz]
-  real(kind=8), allocatable :: subxyzs(:,:,:), tsubxyzs(:)   ! [structure, matom, xyz] and [structure*matom*xyz]
-  real(kind=8), allocatable :: subengs(:)      ! [structure]
-  real(kind=8), allocatable :: subvols(:)      ! [structure]
-  integer, allocatable :: subnatoms(:)            ! [structure]
-
-  real(kind=8), allocatable :: xxs2(:,:,:,:) ! [structure, nn, 1, nat]
-  
-  integer :: matom  ! maximum number of atoms in all structure
-  ! integer :: nvaild ! number of vaild structure
-  integer :: mm ! split structure to every process
+  integer :: ios ! status when read some files
 
   ! related with mpi
-  integer, allocatable :: counts(:), displs(:)
-  integer :: quotient, remainder
+  integer :: myid, numprocs, structures_per_procs
+  integer :: ierr, status(MPI_STATUS_SIZE), sender
+  
+  integer :: quotient, remainder    ! used for calculation of counts array
+  integer, allocatable :: counts(:) ! number of structure for evergy process
+  integer, dimension(2) :: displs   ! range of structure for every process
+  
+  integer :: structures ! total number of structures
+  character(len=15) :: fdebug, ftrain, ftest, fmonitor
+  character(len=1000) :: fdebug2, ftrain2, ftest2, fmonitor2 ! used for string concatenation
 
-  integer, dimension(3) :: starts
-  ! for lattices during scatterv
-  integer, dimension(3) :: sizes, subsizes
-  integer :: newtype, resizedtype
-  integer :: real8size
-  integer(kind=MPI_ADDRESS_KIND) :: extent, begin
-  ! for xyzs during scatterv
-  integer, dimension(3) :: sizes2, subsizes2
-  integer :: newtype2, resizedtype2
+  ! judge whether process is finished
+  logical, allocatable :: pstatus(:)
+  logical :: subpstatus
+  
+  logical :: tmps ! monitor status of mpi message transmission
 
-  real(kind=8), allocatable :: xx2(:,:,:) ![structure, matom,nn]
-  real(kind=8), allocatable :: txx2(:,:) ![structure,matom*nn]
-  real(kind=8), allocatable :: tmp(:) ![counts(i)*matom*nn]
-  integer, dimension(2) :: srange ! range of structures
-  integer :: m
-  real(kind=8), allocatable :: subxx2(:,:,:) ![structure, matom,nn]
-
-  ! for subxx2 during gatherv
-  integer, dimension(3) :: sizes3, subsizes3
-  integer :: newtype3, resizedtype3
+  integer, allocatable :: ntrain2(:), ntest2(:), nrej2(:) ! for all porcesses
+  character(len=50) :: string ! replacement in train.data and test.data files
   
   ! ------------------end fyuhaoy------------------
-
+  
   ! initializations
   counter=0
-  ! ldebug=.true.
+  !ldebug=.true.
   ldebug=.false.
   ncut=1
   ntrain=0
   ntest=0
   nrej=0
-  ethres=0.0       !  in fact no energy threshold 
+  !ethres=-7.7960 ! energy per atom in Ry = 498.944 for 64 
+  !ethres=-7.8125 ! energy per atom in Ry = 500 for 64
+  !ethres=-7.765 ! energy per atom in Ry = 497 for 64
+  ethres=0.0 !  in fact no energy threshold 
+  !ethres=-106.290 ! energy per atom in eV
+  !ethres=-500.d0 !for 64 atom cell in Ry
+  !volumemax=140.d0 ! Bohr3 per atom, caution with clusters in large boxes
   volumemax=400.d0 ! in fact no volume threshold 
   natom=0
   nexample=0
   ntot=0
-  
+
   ! --------------------fyuhaoy--------------------
   ios=0
-  structures_per_procs=0
   structures=0
-  matom=0
-  ! nvaild=0
-  
-  ! ------------------end fyuhaoy------------------
+  quotient=0
+  remainder=0
+  displs=0
+  fdebug2=""
+  ftrain2=""
+  ftest2=""
+  fmonitor2=""
+  string=""
   
   call MPI_INIT (ierr)
   call MPI_COMM_RANK (MPI_COMM_WORLD, myid, ierr)
   call MPI_COMM_SIZE (MPI_COMM_WORLD, numprocs, ierr)
 
+  allocate(pstatus(numprocs))
+  pstatus=.false.
+  subpstatus=.false.
+
+  allocate(ntrain2(numprocs))
+  allocate(ntest2(numprocs))
+  allocate(nrej2(numprocs))
+  ntrain2=0
+  ntest2=0
+  nrej2=0
+  
   if (myid .eq. 0) then
      ! count atoms in structures firstly
      open(20,file='input.data',form='formatted',status='old')
      open(21,file='temp.data',form='formatted',status='replace')
-
+     
      ! count nunber of atoms in every structure, and output to temp.data file
      do while (ios .eq. 0)
         read(20,*,IOSTAT=ios) cdummy
@@ -141,12 +129,6 @@ program maketrain
            if (cdummy(1:4) .eq. 'Next') then
               structures=structures+1
               if (nexample .gt. 1) then
-                 
-                 ! search the maximum number of atoms in all structure
-                 if (matom .lt. (natom-4)) then
-                    matom=natom-4
-                 end if
-                 
                  write(21,*) natom-4
               end if
               natom=0
@@ -156,7 +138,7 @@ program maketrain
         end if
      end do
      write(21,*) natom-4 ! the last structure
-     
+
      close(20)
      close(21)
      ios=0 ! the status recover to 0
@@ -171,387 +153,338 @@ program maketrain
               write(*,*)'Redimension nat!',natom
               stop
            end if
-           if (matom .lt. natom) then
-              matom=natom
-           end if
         end if
      end do
      
      close(21)
      ios=0 ! the status recover to 0
-
-     allocate(tlattices(structures,3,3))
-     allocate(txyzs(structures,matom,3))
-     allocate(tenergys(structures))
-     allocate(tvolumes(structures))
-     allocate(tnatoms(structures))
-     tlattices=0.0
-     txyzs=0.0
-     tenergys=0.0
-     tvolumes=0.0
-     tnatoms=0
-     
-     ! eliminate invailde structure
-     open(20,file='input.data',form='formatted',status='old')
-     open(21,file='temp.data',form='formatted',status='old')
-
-     do while (ios .eq. 0)
-        read(20,*,IOSTAT=ios) cdummy
-        read(21,*,IOSTAT=ios) natom
-        
-        if (ios .eq. 0) then
-           ntot=ntot+1       ! total structure
-           counter=counter+1 ! vaild structure
-
-           do i=1,3
-              read(20,*) tlattices(counter,i,1),tlattices(counter,i,2),tlattices(counter,i,3)
-              !write(*,*) tlattices(counter,i,1),tlattices(counter,i,2),tlattices(counter,i,3)
-           enddo
-           do i=1,natom
-              read(20,*) txyzs(counter,i,1),txyzs(counter,i,2),txyzs(counter,i,3)
-              !write(*,*) txyzs(counter,i,1),txyzs(counter,i,2),txyzs(counter,i,3)
-           enddo
-           read(20,*) tenergys(counter)
-
-           ! we have to use the energy per atom if systems of different size are used
-           ! to have larger numbers, we use eV
-           tenergys(counter)=tenergys(counter)/dble(natom) ! still in Ry
-           ! write(*,*) natom,' atoms with E= ', energys2(counter)
-
-           ! calculation of the volume
-           tvolumes(counter)=0.0d0
-           tempvec(1)=tlattices(counter,1,2)*tlattices(counter,2,3)-tlattices(counter,1,3)*tlattices(counter,2,2)
-           tempvec(2)=tlattices(counter,1,3)*tlattices(counter,2,1)-tlattices(counter,1,1)*tlattices(counter,2,3)
-           tempvec(3)=tlattices(counter,1,1)*tlattices(counter,2,2)-tlattices(counter,1,2)*tlattices(counter,2,1)
-           tvolumes(counter)=tempvec(1)*tlattices(counter,3,1)+tempvec(2)*tlattices(counter,3,2) &
-                +tempvec(3)*tlattices(counter,3,3)
-           tvolumes(counter)=tvolumes(counter)/dble(natom)
-           tnatoms(counter)=natom
-
-           if ((tenergys(counter) .gt. ethres) .or. (tvolumes(counter) .gt. volumemax)) then
-              if (tenergys(counter) .gt. ethres) then
-                 write(*,'(a,i6,a,i6,a,f14.8,a,i6)') &
-                      'Point ', ntot, ' : ', tnatoms(counter),' atoms, E=', tenergys(counter),' rejected '
-              else
-                 write(*,'(a,i6,a,i6,a,f14.8,a,i6)') &
-                      'Point ', ntot, ' : ', tnatoms(counter),' atoms, V=', tvolumes(counter),' rejected '
-              end if
-
-              tlattices(counter,:,:)=0.0
-              txyzs(counter,:,:)=0.0
-              tenergys(counter)=0.0
-              tvolumes(counter)=0.0
-              tnatoms(counter)=0.0
-
-              counter=counter-1
-              nrej=nrej+1
-           end if   
-        end if
-     end do
-
-     structures=counter ! number of vaild structure
-     counter=0 ! recovery init vaule
-
-     allocate(lattices2(structures,3,3))
-     allocate(xyzs2(structures,matom,3))
-     allocate(energys2(structures))
-     allocate(volumes2(structures))
-     allocate(natoms2(structures))
-     lattices2=0.0
-     xyzs2=0.0
-     energys2=0.0
-     volumes2=0.0
-     natoms2=0
-
-     ! vaild data
-     lattices2(:,:,:)=tlattices(1:structures,:,:)
-     xyzs2(:,:,:)=txyzs(1:structures,:,:)
-     energys2(:)=tenergys(1:structures)
-     volumes2(:)=tvolumes(1:structures)
-     natoms2(:)=tnatoms(1:structures)
-
-     ! destroy temporary array
-     deallocate(tlattices)
-     deallocate(txyzs)
-     deallocate(tenergys)
-     deallocate(tvolumes)
-     deallocate(tnatoms)
-
-  end if ! id == 0
-
-  call MPI_Bcast(structures, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
-  call MPI_Bcast(matom, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
-
-  ! Noted that why here can't allocate array?
+   
+  end if ! myid=0
   
+  call MPI_Bcast(structures, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
+  !call MPI_Barrier(MPI_COMM_WORLD, ierr)
+
   ! ensure the array of distribution
   quotient=structures/numprocs
   remainder=mod(structures,numprocs)
 
   allocate(counts(numprocs))
-  allocate(displs(numprocs))
   do i=1,numprocs-1
      counts(i)=quotient
   end do
   counts(numprocs)=quotient+remainder
-  
-  displs(1) = 0
-  do i=2,numprocs
-     displs(i) = displs(i-1) + counts(i-1)
-  end do
 
   if (myid .eq. 0) then
-     print *, "counts", counts
-     print *, "displs", displs
+     displs=[1,counts(myid+1)]
+  else
+     displs=[sum(counts(1:myid))+1,sum(counts(1:myid+1))]
+  end if
+  
+  ! parallel calculation of symmetry function 
+  open(20,file='input.data',form='formatted',status='old')
+  open(24,file='temp.data',form='formatted',status='old')
+
+  ! every process hold its own file. i.e. debug.data.xx (xx=myid)
+  if (myid .lt. 10) then
+     write(fdebug, '(a11,i1)') "debug.data.", myid
+     write(ftrain, '(a11,i1)') "train.data.", myid
+     write(ftest, '(a10,i1)') "test.data.", myid
+     write(fmonitor, '(a13,i1)') "monitor.data.", myid
+  elseif (myid .lt. 100) then
+     write(fdebug, '(a11,i2)') "debug.data.", myid
+     write(ftrain, '(a11,i2)') "train.data.", myid
+     write(ftest, '(a10,i2)') "test.data.", myid
+     write(fmonitor, '(a13,i2)') "monitor.data.", myid
+  elseif (myid .lt. 1000) then
+     write(fdebug, '(a11,i3)') "debug.data.", myid
+     write(ftrain, '(a11,i3)') "train.data.", myid
+     write(ftest, '(a10,i3)') "test.data.", myid
+     write(fmonitor, '(a13,i3)') "monitor.data.", myid
+  else
+     write(*,*) "Warning! too much processes(>=1000). The program will exit."
+     stop
   end if
      
-  allocate(sublatts(counts(myid+1),3,3))
-  allocate(subxyzs(counts(myid+1),matom,3))
-  allocate(subengs(counts(myid+1)))
-  allocate(subvols(counts(myid+1)))
-  allocate(subnatoms(counts(myid+1)))
-  sublatts=0.0
-  subxyzs=0.0
-  subengs=0.0
-  subvols=0.0
-  subnatoms=0
+  open(22,file=fdebug,form='formatted',status='replace')
+  open(21,file=ftrain,form='formatted',status='replace')
+  open(23,file=ftest,form='formatted',status='replace')
+  open(33,file=fmonitor)
 
-  allocate(tsublatts(counts(myid+1)*3*3))
-  allocate(tsubxyzs(counts(myid+1)*matom*3))
-  tsublatts=0.0
-  tsubxyzs=0.0
-
-  ! for lattices
-  starts=[0,0,0]
-  sizes=[structures,3,3]
-  subsizes=[1,3,3]       
-  call MPI_Type_create_subarray(3, sizes, subsizes, starts, &
-       MPI_ORDER_FORTRAN, MPI_REAL8, newtype, ierr)
-  call MPI_Type_size(MPI_REAL8, real8size, ierr)
-  extent = 1*real8size
-  begin  = 0
-  call MPI_Type_create_resized(newtype, begin, extent, resizedtype, ierr)
-  call MPI_Type_commit(resizedtype, ierr)
-
-  ! for xyzs
-  sizes2=[structures,matom,3]
-  subsizes2=[1,matom,3]       
-  call MPI_Type_create_subarray(3, sizes2, subsizes2, starts, &
-       MPI_ORDER_FORTRAN, MPI_REAL8, newtype2, ierr)
-  call MPI_Type_create_resized(newtype2, begin, extent, resizedtype2, ierr)
-  call MPI_Type_commit(resizedtype2, ierr)
-
-  call MPI_Scatterv(lattices2, counts, displs, resizedtype, &
-       tsublatts, counts(myid+1)*3*3, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-  call MPI_Scatterv(xyzs2, counts, displs, resizedtype2, &
-       tsubxyzs, counts(myid+1)*matom*3, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-
-  call MPI_Scatterv(energys2, counts, displs, MPI_REAL8, &
-       subengs, counts(myid+1), MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-  call MPI_Scatterv(volumes2, counts, displs, MPI_REAL8, &
-       subvols, counts(myid+1), MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-  call MPI_Scatterv(natoms2, counts, displs, MPI_INT, &
-       subnatoms, counts(myid+1), MPI_INT, 0, MPI_COMM_WORLD, ierr)
-
-  ! convert tsublatts to sublatts
+  ntot=0
   counter=0
-  do i=1,counts(myid+1)
-     do j=1,3
-        do k=1,3
-           counter=counter+1
-           sublatts(i,k,j)=tsublatts(counter)
-        end do
-     end do
-  end do
-  ! convert tsubxyzs to subxyzs
-  counter=0
-  do i=1,counts(myid+1)
-     do j=1,3
-        do k=1,matom
-           counter=counter+1
-           subxyzs(i,k,j)=tsubxyzs(counter)
-        end do
-     end do
-  end do
+  ! start to calculation of symmetry function
+  do while (ios .eq. 0)
+     read(20,*,IOSTAT=ios) cdummy
+     read(24,*,IOSTAT=ios) natom
+     
+     if (ios .eq. 0) then
+        if (cdummy(1:4).eq.'Next') then
+           ntot=ntot+1       ! total structure
+           counter=counter+1 ! vaild structure
+        end if
+
+        if ((ntot .ge. displs(1)) .and. (ntot .le. displs(2))) then ! only address these process own's structures
+           do i=1,3
+              read(20,*) lattice(i,1),lattice(i,2),lattice(i,3)
+           end do
+           do i=1,natom
+              read(20,*) xyz(i,1),xyz(i,2),xyz(i,3)
+           end do
+           read(20,*)energy
+           ! we have to use the energy per atom if systems of different size are used
+           ! to have larger numbers, we use eV
+           energy=energy/dble(natom) ! still in Ry
+           ! calculation of the volume
+           volume=0.0d0
+           tempvec(1)=lattice(1,2)*lattice(2,3)-lattice(1,3)*lattice(2,2)
+           tempvec(2)=lattice(1,3)*lattice(2,1)-lattice(1,1)*lattice(2,3)
+           tempvec(3)=lattice(1,1)*lattice(2,2)-lattice(1,2)*lattice(2,1)
+           volume=tempvec(1)*lattice(3,1)+tempvec(2)*lattice(3,2)&
+                +tempvec(3)*lattice(3,3)
+           volume=volume/dble(natom)
+
+           if (ldebug) then
+              write(22,*)'lattice vectors in Bohr'
+              do i=1,3
+                 write(22,'(3f14.6)')lattice(i,1),lattice(i,2),lattice(i,3)
+              enddo
+              write(22,*)'Atomic positions in Bohr'
+              do i=1,natom
+                 write(22,'(3f14.8)')xyz(i,1),xyz(i,2),xyz(i,3)
+              enddo
+           endif
+
+           if ((energy .gt. ethres) .or. (volume .gt. volumemax)) then
+              if (energy .gt. ethres) then
+                 write(*,'(a,i6,a,i6,a,f14.8,a,i6)') &
+                      'Point ',ntot,' : ',natom,' atoms, E=',energy,' rejected '
+              end if
+              if (volume .gt. volumemax) then
+                 write(*,'(a,i6,a,i6,a,f14.8,a,i6)') &
+                      'Point ',ntot,' : ',natom,' atoms, V=',volume,' rejected '
+              end if
+              
+              counter=counter-1
+              nrej=nrej+1
+           else ! vaild structure
+              ! convert from Bohr to Angstrom
+              do i=1,3
+                 lattice(i,1)=lattice(i,1)*bohr2a
+                 lattice(i,2)=lattice(i,2)*bohr2a
+                 lattice(i,3)=lattice(i,3)*bohr2a
+              end do
+              do i=1,natom
+                 xyz(i,1)=xyz(i,1)*bohr2a
+                 xyz(i,2)=xyz(i,2)*bohr2a
+                 xyz(i,3)=xyz(i,3)*bohr2a
+              end do
+              if (ldebug) then
+                 write(22,*)'lattice vectors in Angstrom'
+                 do i=1,3
+                    write(22,'(3f14.6)')lattice(i,1),lattice(i,2),lattice(i,3)
+                 end do
+                 write(22,*)'Atomic positions in Angstrom'
+                 do i=1,natom
+                    write(22,'(3f14.8)')xyz(i,1),xyz(i,2),xyz(i,3)
+                 end do
+              endif
+
+              allocate (xxyyzz(natom,3))
+              do i=1,natom
+                 xxyyzz(i,1)=xyz(i,1)
+                 xxyyzz(i,2)=xyz(i,2)
+                 xxyyzz(i,3)=xyz(i,3)
+              end do
+              ! one determination of all function values per geometry
+              ! functions for all atoms are calculated at once
+              ! write(*,*) lattice
+              call functions(counter,natom,nn,lattice,xxyyzz,&
+                   xx,dxdy,strs,.false.,.true.,ldebug,e,volume)
+              deallocate (xxyyzz)
+              
+              ! check if write format is sufficient to separate numbers
+              do i=1,natom
+                 do j=1,9
+                    if (xx(j,1,i) .gt. 10000.d0) then
+                       write(*,*)'Warning too large xx ',j,i,xx(j,1,i)
+                       stop
+                    elseif (xx(j,1,i) .lt. -9999.d0) then
+                       write(*,*) 'Warning too low xx ',j,i,xx(j,1,i)
+                       stop
+                    end if
+                 end do
+              end do
+              
+              call getran(zran)
+
+              de=-14.9817443422860
+              ej=e/(2*natom*1312.22) 
+      
+              if (zran .gt. 0.2d0)then ! train.data
+              !if (.true.)then ! train.data
+                 ntrain=ntrain+1
+                 write(21,*)natom
+                 diffe=energy-de-ej
+                 do i=1,natom
+                    write(21,'(600f18.11)') (xx(j,1,i),j=1,nn)
+                 end do
+                 write(21,'(f14.8,x,a)') energy,"    myid"
+                 write(33,'(i8,x,2f20.12,i8)') ntot,ej,diffe,myid
+              else ! test.data
+                 diffe=energy-de-ej
+                 ntest=ntest+1
+                 write(23,*) natom
+                 do i=1,natom
+                    write(23,'(600f18.11)') (xx(j,1,i),j=1,nn)
+                 end do
+                 write(23,'(f14.8,x,a)') energy,"    myid"
+                 write(33,'(i8,x,2f20.12,i8)') ntot,ej,diffe,myid
+              endif
+              
+           end if ! vaild structure
+        else
+           do i=1,natom+4
+              read(20,*)
+           end do
+        end if ! process's own structure
+     end if ! status of reading
+  end do ! read every line
+
+  close(20)
+  close(21)
+  close(22)
+  close(23)
+  close(24)
+  ios=0 ! the status recover to 0
   
-  ! symmetrization
-  allocate(subxx2(counts(myid+1),matom,nn))
-  subxx2=0.0
+  if ((ntrain+ntest) .ne. counts(myid+1)) then
+     if (myid .lt. 10) then
+        write(*,'(a, i1, a)')'Error, ntest+ntrain.ne.counter in ', myid, " process."
+     elseif (myid .lt. 100) then
+        write(*,'(a, i2, a)')'Error, ntest+ntrain.ne.counter in ', myid, " process."
+     elseif (myid .lt. 100) then
+        write(*,'(a, i3, a)')'Error, ntest+ntrain.ne.counter in ', myid, " process."
+     else
+        write(*,*) "Warning! too much processes(>=1000). The program will exit."
+     end if
+  endif
 
-  do i=1,counts(myid+1)
+  subpstatus=.true.
+  call MPI_Gather(subpstatus, 1, MPI_LOGICAL, pstatus, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr)
+  
+  write(*,'(a, i1, a)')'----------------process ', myid, '----------------'
+  write(6,*)counts(myid+1),' structures read from input.data'
+  write(6,*)ntrain,' training points'
+  write(6,*)ntest,' test points'
+  write(6,*)nrej ,' rejected high energy points'
+
+  call MPI_Gather(ntrain, 1, MPI_INT, ntrain2, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
+  call MPI_Gather(ntest, 1, MPI_INT, ntest2, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
+  call MPI_Gather(nrej, 1, MPI_INT, nrej2, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
+  
+  if (myid .eq. 0) then
      
-     energy=subengs(i)
-     volume=subvols(i)
-     natom=subnatoms(i)
-     
-     ! convert from Bohr to Angstrom
-     do j=1,3
-        lattice(j,1)=sublatts(i,j,1)*bohr2a
-        lattice(j,2)=sublatts(i,j,2)*bohr2a
-        lattice(j,3)=sublatts(i,j,3)*bohr2a
-     end do
-     do j=1,natom
-        xyz(j,1)=subxyzs(i,j,1)*bohr2a
-        xyz(j,2)=subxyzs(i,j,2)*bohr2a
-        xyz(j,3)=subxyzs(i,j,3)*bohr2a
+     do i=0,numprocs-1
+
+        if (myid .lt. 10) then
+           write(fdebug, '(a11,i1)') "debug.data.", i
+           write(ftrain, '(a11,i1)') "train.data.", i
+           write(ftest, '(a10,i1)') "test.data.", i
+           write(fmonitor, '(a13,i1)') "monitor.data.", i
+        elseif (myid .lt. 100) then
+           write(fdebug, '(a11,i2)') "debug.data.", i
+           write(ftrain, '(a11,i2)') "train.data.", i
+           write(ftest, '(a10,i2)') "test.data.", i
+           write(fmonitor, '(a13,i2)') "monitor.data.", i
+        elseif (myid .lt. 1000) then
+           write(fdebug, '(a11,i3)') "debug.data.", i
+           write(ftrain, '(a11,i3)') "train.data.", i
+           write(ftest, '(a10,i3)') "test.data.", i
+           write(fmonitor, '(a13,i3)') "monitor.data.", i
+        else
+           write(*,*) "Warning! too much processes(>=1000). The program will exit."
+           stop
+        end if
+
+        fdebug2=trim(fdebug2)//" "//fdebug
+        ftrain2=trim(ftrain2)//" "//ftrain
+        ftest2=trim(ftest2)//" "//ftest
+        fmonitor2=trim(fmonitor2)//" "//fmonitor
+        
      end do
 
-     allocate (xxyyzz(natom,3))
-     do j=1,natom
-        xxyyzz(j,1)=xyz(j,1)
-        xxyyzz(j,2)=xyz(j,2)
-        xxyyzz(j,3)=xyz(j,3)
-     end do
-
-     call functions(counter,natom,nn,lattice,xxyyzz, &
-          xx,dxdy,strs,.false.,.true.,ldebug,e,volume)
-     
-     deallocate (xxyyzz)
-
-     ! check if write format is sufficient to separate numbers
-     do j=1,natom
-        do k=1,9
-           if(xx(k,1,j) .gt. 10000.d0) then
-              write(*,*)'Warning too large xx ',k,j,xx(k,1,j)
-              stop
-           elseif(xx(k,1,j) .lt. -9999.d0) then
-              write(*,*)'Warning too low xx ',k,j,xx(k,1,j)
-              stop
+     ! ensure all processes are finished
+     tmps=.false.
+     do while(.not.tmps)
+        do i=1,numprocs
+           if (pstatus(i)) then
+              tmps=.true.
+           else
+              tmps=.false.
            end if
         end do
+        call sleep(3) ! sleep 3s
      end do
+     
+     ! linux shell command
+     call system("cat "//trim(fdebug2)//" > debug.data")
+     call system("cat "//trim(ftrain2)//" > train.data")
+     call system("cat "//trim(ftest2)//" > test.data")
+     call system("cat "//trim(fmonitor2)//" > monitor.data")
 
-     ! tramist symmetry function to root process
-     do j=1,natom
-        do k=1,nn
-           subxx2(i,j,k)=xx(k,1,j)
+     ! remove temporary file i.e. debug.data.xx
+     call system("rm debug.data.*")
+     call system("rm train.data.*")
+     call system("rm test.data.*")
+     call system("rm monitor.data.*")
+
+     ! train.data
+     if (sum(ntrain2) .gt. 0) then
+        do i=1,sum(ntrain2)
+           if (i .lt. 10) then
+              write(string, '(a23,i1,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
+           elseif (i .lt. 100) then
+              write(string, '(a23,i2,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
+           elseif (i .lt. 1000) then
+              write(string, '(a23,i3,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
+           else
+              write(*,*) "Warning! too much processes(>=1000). The program will exit."
+              stop
+           end if
+           call system(trim(string))
         end do
-     end do
-  end do
-  
-  allocate(xx2(structures,matom,nn))
-  allocate(txx2(structures,matom*nn))
-  xx2=0.0
-  txx2=0.0
-  
-  ! for subxx2
-  sizes3=[structures,matom,nn]
-  subsizes3=[1,matom,nn]
-  
-  call MPI_Type_create_subarray(3, sizes3, subsizes3, starts, &
-       MPI_ORDER_FORTRAN, MPI_REAL8, newtype3, ierr)
-  call MPI_Type_create_resized(newtype3, begin, extent, resizedtype3, ierr)
-  call MPI_Type_commit(resizedtype3, ierr)   
-
-  call MPI_Gatherv(subxx2, counts(myid+1)*matom*nn, MPI_REAL8, &
-       txx2, counts, displs, resizedtype3, 0, MPI_COMM_WORLD, ierr)
-
-  if (myid .eq. 0) then
-     
-     do i=1,numprocs
-        allocate(tmp(counts(i)*matom*nn))
-        ! ensure range of structures
-        if (i .eq. 1) then
-           srange=[1,counts(i)]
-        else
-           srange=[sum(counts(1:i-1))+1, sum(counts(1:i))]
-        end if
-        ! convert to tmp
-        counter=0
-        do j=srange(1),srange(2)
-           do k=1,matom*nn
-              counter=counter+1
-              tmp(counter)=txx2(j,k)
-           end do
+     end if
+     ! test.data
+     if (sum(ntest2) .gt. 0) then
+        do i=1,sum(ntest2)
+           if (i .lt. 10) then
+              write(string, '(a23,i1,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
+           elseif (i .lt. 100) then
+              write(string, '(a23,i2,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
+           elseif (i .lt. 1000) then
+              write(string, '(a23,i3,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
+           else
+              write(*,*) "Warning! too much processes(>=1000). The program will exit."
+              stop
+           end if
+           call system(trim(string))
         end do
-        ! convert to xx2
-        counter=0
-        do j=1,nn
-           do k=1,matom
-              do m=srange(1),srange(2)
-                 counter=counter+1
-                 xx2(m,k,j)=tmp(counter)
-              end do
-           end do
-        end do
-        deallocate(tmp)
-     end do
+     end if
      
-     open(21,file='train.data',form='formatted',status='replace')
-     open(23,file='test.data',form='formatted',status='replace')
+     write(*,*)'>>>>>>>>>>>>>>>>>>>> total >>>>>>>>>>>>>>>>>>>>'
+     write(6,*)sum(counts),' structures read from input.data'
+     write(6,*)sum(ntrain2),' training points'
+     write(6,*)sum(ntest2),' test points'
+     write(6,*)sum(nrej2) ,' rejected high energy points'
 
-     do i=1,structures
-        ! determination of a random number between 0 and 1
-        call getran(zran)
-
-        !if(zran .gt. 0.2d0)then ! train.data
-        if(.true.)then ! train.data
-           ntrain=ntrain+1
-           ! write to train.data
-           write(21,*)natoms2(structures)
-           !diffe=energy-de-ej
-           do j=1,natoms2(structures)
-              write(21,'(600f18.11)') (xx2(i,j,k),k=1,nn)
-           end do
-           write(21,'(f14.8,x,i5)') energys2(i), ntrain
-           !write(33,'(i8,x,2f20.12)')ntot,ej,diffe
-        else ! test.data
-           !diffe=energy-de-ej
-           ntest=ntest+1
-           write(23,*) natoms2(structures)
-           do j=1,natoms2(structures)
-              write(23,'(600f18.11)') (xx2(i,j,k),k=1,nn)
-           end do
-           write(23,'(f14.8,x,i5)') energys2(i),ntest
-           !write(33,'(i8,x,2f20.12)')ntot,ej,diffe
-        end if
-     end do
-     
-     close(21)
-     close(23)
-     !call MPI_Barrier(MPI_COMM_WORLD, ierr)
-     
-     if ((ntrain+ntest) .ne. structures) then
-        write(*,*)'Error, ntest+ntrain.ne.counter'
-     endif
-     
-     write(6,*) structures,' structures read from input.data'
-     write(6,*) ntrain,' training points'
-     write(6,*) ntest,' test points'
-     write(6,*) nrej ,' rejected high energy points'
-
-     
   end if
   
+
+  
   call MPI_FINALIZE(ierr)
-  stop
+  
+  stop  
 end program maketrain
-
-!********************************************************
-! convert receving array to correct array
-!FUNCTION processor(recvarray, nstructure, nrow, ncol)
-!  implicit none
-
-!  integer :: nstructure, nrow, ncol ! dimension of array which need convert
-!  real(kind=8) :: recvarray(nstrucutre*nrow*ncol)
-!  real(kind=8) :: newarray(nstructure,nrow,ncol)
-
-!  integer :: i, j, k, counter
-!  counter=0
-!  do i=1,nstructure
-!     do j=1,ncol
-!        do k=1,nrow
-!           counter=counter+1
-!           newarray(i,k,j)=recvarray(counter)
-!        end do
-!     end do
-!  end do
-!  processor=newarray
-!end FUNCTION processor
-!********************************************************
-
-! ------------------end fyuhaoy------------------
-
 
 !********************************************************
 
