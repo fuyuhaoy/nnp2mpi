@@ -1,8 +1,6 @@
-! 2016-7-14
-! Every process have own iostream to the input.data.
-! They only address structures within designated range, and output to temporary files.
-! Lastly, merge temporary files to produce required files
-! Efficiency of program isn't still fast expectingly.
+! 2016-7-17
+! When distribute the strutcure to every process, the distribution scheme is based on 
+! the same number of atoms, achieving the balanced load.
 
 program maketrain
   implicit none
