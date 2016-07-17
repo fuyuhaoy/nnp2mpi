@@ -1,6 +1,8 @@
-! 2016-7-17
-! When distribute the strutcure to every process, the distribution scheme is based on 
-! the same number of atoms, achieving the balanced load.
+! 2016-7-14
+! Every process have own iostream to the input.data.
+! They only address structures within designated range, and output to temporary files.
+! Lastly, merge temporary files to produce required files
+! Efficiency of program isn't still fast expectingly.
 
 program maketrain
   implicit none
@@ -162,9 +164,24 @@ program maketrain
   call MPI_Bcast(structures, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
   !call MPI_Barrier(MPI_COMM_WORLD, ierr)
 
-  ! distribute the strucures
-  call structure2process(numprocs, myid, structures, counts, displs)
+  ! ensure the array of distribution
+  quotient=structures/numprocs
+  remainder=mod(structures,numprocs)
 
+  allocate(counts(numprocs))
+  do i=1,numprocs-1
+     counts(i)=quotient
+  end do
+  counts(numprocs)=quotient+remainder
+
+  if (myid .eq. 0) then
+     displs=[1,counts(myid+1)]
+  else
+     displs=[sum(counts(1:myid))+1,sum(counts(1:myid+1))]
+  end if
+  
+  call structure2process(numprocs, myid, structures, counts, displs)
+  
   ! parallel calculation of symmetry function 
   open(20,file='input.data',form='formatted',status='old')
   open(24,file='temp.data',form='formatted',status='old')
@@ -517,7 +534,6 @@ subroutine structure2process(numprocs, myid, structures, counts, displs)
   displs=tmpdispls(myid+1,:)
   
 end subroutine structure2process
-!********************************************************
 
 !********************************************************
 
