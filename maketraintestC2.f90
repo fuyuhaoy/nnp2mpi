@@ -1,8 +1,6 @@
-! 2016-7-14
-! Every process have own iostream to the input.data.
-! They only address structures within designated range, and output to temporary files.
-! Lastly, merge temporary files to produce required files
-! Efficiency of program isn't still fast expectingly.
+! 2016-7-17
+! When distribute the strutcure to every process, the distribution scheme is based on 
+! the same number of atoms, achieving the balanced load.
 
 program maketrain
   implicit none
@@ -164,22 +162,9 @@ program maketrain
   call MPI_Bcast(structures, 1, MPI_INT, 0, MPI_COMM_WORLD, ierr)
   !call MPI_Barrier(MPI_COMM_WORLD, ierr)
 
-  ! ensure the array of distribution
-  quotient=structures/numprocs
-  remainder=mod(structures,numprocs)
+  ! distribute the strucures
+  call structure2process(numprocs, myid, structures, counts, displs)
 
-  allocate(counts(numprocs))
-  do i=1,numprocs-1
-     counts(i)=quotient
-  end do
-  counts(numprocs)=quotient+remainder
-
-  if (myid .eq. 0) then
-     displs=[1,counts(myid+1)]
-  else
-     displs=[sum(counts(1:myid))+1,sum(counts(1:myid+1))]
-  end if
-  
   ! parallel calculation of symmetry function 
   open(20,file='input.data',form='formatted',status='old')
   open(24,file='temp.data',form='formatted',status='old')
@@ -482,6 +467,57 @@ program maketrain
   call MPI_FINALIZE(ierr)
   stop  
 end program maketrain
+
+!********************************************************
+! calculate the range of structures by considering the number of atoms.
+! numprocs: number of processes
+! myid: id of process
+! structures: number of structures
+! displs: range of structures for every process
+subroutine structure2process(numprocs, myid, structures, counts, displs)
+  integer, intent(in) :: numprocs, myid, structures
+  integer, intent(out) :: counts(numprocs), displs(2)
+  integer :: atom(structures), tnatom
+  integer :: tmpdispls(numprocs,2)
+  integer :: i, p, natom
+  counts=0
+  displs=0
+  atom=0
+  natom=0
+  p=0
+  tmpdispls=0
+
+  open(21,file='temp.data',form='formatted',status='old')
+  do i=1,structures
+     read(21,*) atom(i)
+  end do
+  close(21)
+  
+  ! total number of atoms in all structures
+  tnatom=sum(atom(:))
+  ! ensure the array of distribution
+  quotient=tnatom/numprocs
+  
+  do i=1,structures
+     natom=natom+atom(i)
+     if ((natom .le. quotient) .and. &
+          (natom+atom(i+1) .gt. quotient)) then ! reaches the boundary
+        p=p+1
+        if (p .eq. 1) then
+           tmpdispls(p,:)=[1,i]
+        elseif (p .lt. numprocs) then
+           tmpdispls(p,:)=[tmpdispls(p-1,2)+1,i]
+        end if
+        natom=0
+        counts(p)=tmpdispls(p,2)+1-tmpdispls(p,1)
+     end if
+  end do
+  tmpdispls(numprocs,:)=[tmpdispls(numprocs-1,2)+1,structures]
+  counts(numprocs)=tmpdispls(numprocs,2)+1-tmpdispls(numprocs,1)
+  displs=tmpdispls(myid+1,:)
+  
+end subroutine structure2process
+!********************************************************
 
 !********************************************************
 
