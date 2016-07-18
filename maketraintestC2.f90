@@ -1,10 +1,10 @@
-! 2016-7-17
-! When distribute the strutcure to every process, the distribution scheme is based on 
-! the same number of atoms, achieving the balanced load.
+! 2016-7-18
+! line:3119 remove needless plus sign, so mpif90 of intel can compile.
 
 program maketrain
   implicit none
-  include '/opt/openmpi-1.6.5/include/mpif.h'
+  !include '/opt/openmpi-1.6.5/include/mpif.h'
+  include '/opt/intel/impi/4.1.3.049/include64/mpif.h'
   
   integer i,j,k
   integer nat
@@ -3116,7 +3116,10 @@ end subroutine structure2process
         + 2.d0*dangvec(3)*deltazj*dfcutijdzi
 
 ! d/dz_j
-        dxdy(ii,i,n,3)=dxdy(ii,i,n,3)+&
+        !dxdy(ii,i,n,3)=dxdy(ii,i,n,3)+&
+  ! --------------------fyuhaoy--------------------
+	dxdy(ii,i,n,3)=dxdy(ii,i,n,3)&
+  ! --------------------fyuhaoy--------------------
         + 2.d0*dangvec(1)*deltaxj*dfcutijdzj&
         + 2.d0*dangvec(2)*deltayj*dfcutijdzj&
         - 2.d0*dangvec(3)*fcutij&
