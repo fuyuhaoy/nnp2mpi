@@ -1,10 +1,11 @@
-! 2016-7-18
-! line:3119 remove needless plus sign, so mpif90 of intel can compile.
+! 2016-7-27
+! add a new replacement method (myid -> xx) for train.data and test.data.
+! it has higher efficiency.
 
 program maketrain
   implicit none
-  !include '/opt/openmpi-1.6.5/include/mpif.h'
-  include '/opt/intel/impi/4.1.3.049/include64/mpif.h'
+  include '/opt/openmpi-1.6.5/include/mpif.h'
+  !include '/opt/intel/impi/4.1.3.049/include64/mpif.h'
   
   integer i,j,k
   integer nat
@@ -63,7 +64,8 @@ program maketrain
   logical :: tmps ! monitor status of mpi message transmission
 
   integer, allocatable :: ntrain2(:), ntest2(:), nrej2(:) ! for all porcesses
-  character(len=50) :: string ! replacement in train.data and test.data files
+  character(len=1024) :: buffer ! buffer of IO for train.data and test.data files
+  integer :: size ! actual size of buffer during reading
   
   ! ------------------end fyuhaoy------------------
   
@@ -97,7 +99,8 @@ program maketrain
   ftrain2=""
   ftest2=""
   fmonitor2=""
-  string=""
+  buffer=""
+  size=0
   
   call MPI_INIT (ierr)
   call MPI_COMM_RANK (MPI_COMM_WORLD, myid, ierr)
@@ -438,38 +441,104 @@ program maketrain
      call system("rm test.data.*")
      call system("rm monitor.data.*")
 
+     ! method 1
      ! train.data
-     if (sum(ntrain2) .gt. 0) then
-        do i=1,sum(ntrain2)
-           if (i .lt. 10) then
-              write(string, '(a23,i1,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
-           elseif (i .lt. 100) then
-              write(string, '(a23,i2,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
-           elseif (i .lt. 1000) then
-              write(string, '(a23,i3,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
-           else
-              write(*,*) "Warning! too much processes(>=1000). The program will exit."
-              stop
-           end if
-           call system(trim(string))
-        end do
-     end if
+     !if (sum(ntrain2) .gt. 0) then
+     !   do i=1,sum(ntrain2)
+     !      if (i .lt. 10) then
+     !         write(string, '(a23,i1,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
+     !      elseif (i .lt. 100) then
+     !         write(string, '(a23,i2,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
+     !      elseif (i .lt. 1000) then
+     !         write(string, '(a23,i3,a13)') "sed -i '0,/myid/s/myid/", i, "/' train.data"
+     !      else
+     !         write(*,*) "Warning! too much processes(>=1000). The program will exit."
+     !         stop
+     !      end if
+     !      call system(trim(string))
+     !   end do
+     !end if
      ! test.data
-     if (sum(ntest2) .gt. 0) then
-        do i=1,sum(ntest2)
-           if (i .lt. 10) then
-              write(string, '(a23,i1,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
-           elseif (i .lt. 100) then
-              write(string, '(a23,i2,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
-           elseif (i .lt. 1000) then
-              write(string, '(a23,i3,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
+     !if (sum(ntest2) .gt. 0) then
+     !   do i=1,sum(ntest2)
+     !      if (i .lt. 10) then
+     !         write(string, '(a23,i1,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
+     !      elseif (i .lt. 100) then
+     !         write(string, '(a23,i2,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
+     !      elseif (i .lt. 1000) then
+     !         write(string, '(a23,i3,a12)') "sed -i '0,/myid/s/myid/", i, "/' test.data"
+     !      else
+     !         write(*,*) "Warning! too much processes(>=1000). The program will exit."
+     !         stop
+     !      end if
+     !      call system(trim(string))
+     !   end do
+     !end if
+
+     ! method 2
+     call system("mv train.data tmptrain.data")
+     call system("mv test.data tmptest.data")
+     
+     ! train.data
+     open(200,file='tmptrain.data',form='formatted',status='old')
+     open(201,file='train.data',form='formatted',status='replace')
+     open(204, file='monitor.data',form='formatted',position='append')
+     
+     ! Note that the status: 0:ok ; -1:end-of-file; -2:end-of-line
+     counter=0
+     do while (.not. IS_IOSTAT_END(ios))
+        read(200,'(a)',ADVANCE='NO',IOSTAT=ios,SIZE=size)buffer
+        if (ios .eq. 0) then
+           write(201,'(a)',ADVANCE='NO')buffer(1:size)
+        else if (ios .eq. -2) then ! end-of-line
+           if (buffer(size-3:size) .eq. "myid") then
+              counter=counter+1
+              write(201,'(a,i8)',ADVANCE='NO')buffer(1:size-4),counter
            else
-              write(*,*) "Warning! too much processes(>=1000). The program will exit."
-              stop
+              write(201,'(a)',ADVANCE='NO')buffer(1:size)
            end if
-           call system(trim(string))
-        end do
-     end if
+           write(201,*) ! linefeed
+        else if (ios .ne. -1) then
+           write(*,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in train.data."
+           write(204,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in train.data."
+           stop ! exit program
+        end if
+     end do
+     
+     close(200)
+     close(201)
+     ios=0 ! the status recover to 0
+     call system("rm tmptrain.data")
+
+     open(202,file='tmptest.data',form='formatted',status='old')
+     open(203,file='test.data',form='formatted',status='replace')
+     ! test.data
+     counter=0
+     do while (.not. IS_IOSTAT_END(ios))
+        read(202,'(a)',ADVANCE='NO',IOSTAT=ios,SIZE=size)buffer
+        if (ios .eq. 0) then
+           write(203,'(a)',ADVANCE='NO')buffer(1:size)
+        else if (ios .eq. -2) then ! end-of-line
+           if (buffer(size-3:size) .eq. "myid") then
+              counter=counter+1
+              write(203,'(a,i8)',ADVANCE='NO')buffer(1:size-4),counter
+           else
+              write(203,'(a)',ADVANCE='NO')buffer(1:size)
+           end if
+           write(203,*) ! linefeed
+        else if (ios .ne. -1) then
+           write(*,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
+           write(204,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
+           stop ! exit program          
+        end if
+     end do
+     
+     close(202)
+     close(203)
+     ios=0 ! the status recover to 0
+     call system("rm tmptest.data")
+     
+     close(204)
      
      write(*,*)'>>>>>>>>>>>>>>>>>>>> total >>>>>>>>>>>>>>>>>>>>'
      write(6,*)sum(counts),' structures read from input.data'
