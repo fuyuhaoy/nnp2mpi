@@ -1,5 +1,6 @@
 ! 2016-7-27
 ! add a new replacement method (myid -> xx) for train.data and test.data.
+! if number of processes are more than 1, replacing will run on task 0 and 1, respectively.
 ! it has higher efficiency.
 
 program maketrain
@@ -440,7 +441,7 @@ program maketrain
      call system("rm train.data.*")
      call system("rm test.data.*")
      call system("rm monitor.data.*")
-
+     
      ! method 1
      ! train.data
      !if (sum(ntrain2) .gt. 0) then
@@ -476,8 +477,13 @@ program maketrain
      !end if
 
      ! method 2
+     ! send pstatus to task 1, its aim is to for replacing (myid -> xx) test.data on this task.
+     if (numprocs .gt. 1) then
+        call MPI_Send(pstatus, numprocs, MPI_LOGICAL, 1, 2000, MPI_COMM_WORLD, ierr)
+     end if
+     
+     ! replace myid to xx in train.data
      call system("mv train.data tmptrain.data")
-     call system("mv test.data tmptest.data")
      
      ! train.data
      open(200,file='tmptrain.data',form='formatted',status='old')
@@ -509,9 +515,72 @@ program maketrain
      close(201)
      ios=0 ! the status recover to 0
      call system("rm tmptrain.data")
+     
+     ! replace myid to xx in test.data
+     if (numprocs .eq. 1) then ! run the code when only using one process.
+        call system("mv test.data tmptest.data")
+        
+        open(202,file='tmptest.data',form='formatted',status='old')
+        open(203,file='test.data',form='formatted',status='replace')
+        ! test.data
+        counter=0
+        do while (.not. IS_IOSTAT_END(ios))
+           read(202,'(a)',ADVANCE='NO',IOSTAT=ios,SIZE=size)buffer
+           if (ios .eq. 0) then
+              write(203,'(a)',ADVANCE='NO')buffer(1:size)
+           else if (ios .eq. -2) then ! end-of-line
+              if (buffer(size-3:size) .eq. "myid") then
+                 counter=counter+1
+                 write(203,'(a,i8)',ADVANCE='NO')buffer(1:size-4),counter
+              else
+                 write(203,'(a)',ADVANCE='NO')buffer(1:size)
+              end if
+              write(203,*) ! linefeed
+           else if (ios .ne. -1) then
+              write(*,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
+              write(204,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
+              stop ! exit program          
+           end if
+        end do
+        
+        close(202)
+        close(203)
+        ios=0 ! the status recover to 0
+        call system("rm tmptest.data")
+     end if
+     
+     close(204)
+     
+     write(*,*)'>>>>>>>>>>>>>>>>>>>> total >>>>>>>>>>>>>>>>>>>>'
+     write(6,*)sum(counts),' structures read from input.data'
+     write(6,*)sum(ntrain2),' training points'
+     write(6,*)sum(ntest2),' test points'
+     write(6,*)sum(nrej2) ,' rejected high energy points'
 
+  end if
+
+  ! replace myid to xx in test.data
+  if (myid .eq. 1) then
+     call MPI_Recv(pstatus, numprocs, MPI_LOGICAL, 0, 2000, MPI_COMM_WORLD, status, ierr)
+
+     ! ensure all processes are finished
+     tmps=.false.
+     do while(.not.tmps)
+        do i=1,numprocs
+           if (pstatus(i)) then
+              tmps=.true.
+           else
+              tmps=.false.
+           end if
+        end do
+        call sleep(3) ! sleep 3s
+     end do
+     
+     call system("mv test.data tmptest.data")
+     
      open(202,file='tmptest.data',form='formatted',status='old')
      open(203,file='test.data',form='formatted',status='replace')
+     open(205, file='monitor.data',form='formatted',position='append')
      ! test.data
      counter=0
      do while (.not. IS_IOSTAT_END(ios))
@@ -528,7 +597,7 @@ program maketrain
            write(203,*) ! linefeed
         else if (ios .ne. -1) then
            write(*,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
-           write(204,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
+           write(205,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
            stop ! exit program          
         end if
      end do
@@ -538,14 +607,8 @@ program maketrain
      ios=0 ! the status recover to 0
      call system("rm tmptest.data")
      
-     close(204)
+     close(205)
      
-     write(*,*)'>>>>>>>>>>>>>>>>>>>> total >>>>>>>>>>>>>>>>>>>>'
-     write(6,*)sum(counts),' structures read from input.data'
-     write(6,*)sum(ntrain2),' training points'
-     write(6,*)sum(ntest2),' test points'
-     write(6,*)sum(nrej2) ,' rejected high energy points'
-
   end if
   
   call MPI_FINALIZE(ierr)
