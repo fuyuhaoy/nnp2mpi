@@ -1,12 +1,11 @@
-! 2016-7-27
-! add a new replacement method (myid -> xx) for train.data and test.data.
-! if number of processes are more than 1, replacing will run on task 0 and 1, respectively.
-! it has higher efficiency.
+! 2016-8-3
+! fix some bugs
 
 program maketrain
   implicit none
   include '/opt/openmpi-1.6.5/include/mpif.h'
   !include '/opt/intel/impi/4.1.3.049/include64/mpif.h'
+  !include '/opt/intel/impi/4.1.0.024/include64/mpif.h'
   
   integer i,j,k
   integer nat
@@ -183,6 +182,8 @@ program maketrain
   end if
   
   call structure2process(numprocs, myid, structures, counts, displs)
+
+  write(*,'(a,i4,a,2i4)')"myid", myid, " -> ", displs(:)
   
   ! parallel calculation of symmetry function 
   open(20,file='input.data',form='formatted',status='old')
@@ -376,7 +377,7 @@ program maketrain
   subpstatus=.true.
   call MPI_Gather(subpstatus, 1, MPI_LOGICAL, pstatus, 1, MPI_LOGICAL, 0, MPI_COMM_WORLD, ierr)
   
-  write(*,'(a, i1, a)')'----------------process ', myid, '----------------'
+  write(*,'(a, i3, a)')'----------------process ', myid, '----------------'
   write(6,*)counts(myid+1),' structures read from input.data'
   write(6,*)ntrain,' training points'
   write(6,*)ntest,' test points'
@@ -390,17 +391,17 @@ program maketrain
      
      do i=0,numprocs-1
 
-        if (myid .lt. 10) then
+        if (i .lt. 10) then
            write(fdebug, '(a11,i1)') "debug.data.", i
            write(ftrain, '(a11,i1)') "train.data.", i
            write(ftest, '(a10,i1)') "test.data.", i
            write(fmonitor, '(a13,i1)') "monitor.data.", i
-        elseif (myid .lt. 100) then
+        elseif (i .lt. 100) then
            write(fdebug, '(a11,i2)') "debug.data.", i
            write(ftrain, '(a11,i2)') "train.data.", i
            write(ftest, '(a10,i2)') "test.data.", i
            write(fmonitor, '(a13,i2)') "monitor.data.", i
-        elseif (myid .lt. 1000) then
+        elseif (i .lt. 1000) then
            write(fdebug, '(a11,i3)') "debug.data.", i
            write(ftrain, '(a11,i3)') "train.data.", i
            write(ftest, '(a10,i3)') "test.data.", i
@@ -429,7 +430,7 @@ program maketrain
         end do
         call sleep(3) ! sleep 3s
      end do
-     
+
      ! linux shell command
      call system("cat "//trim(fdebug2)//" > debug.data")
      call system("cat "//trim(ftrain2)//" > train.data")
@@ -488,7 +489,7 @@ program maketrain
      ! train.data
      open(200,file='tmptrain.data',form='formatted',status='old')
      open(201,file='train.data',form='formatted',status='replace')
-     open(204, file='monitor.data',form='formatted',position='append')
+     !open(204, file='monitor.data',form='formatted',position='append')
      
      ! Note that the status: 0:ok ; -1:end-of-file; -2:end-of-line
      counter=0
@@ -505,8 +506,8 @@ program maketrain
            end if
            write(201,*) ! linefeed
         else if (ios .ne. -1) then
-           write(*,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in train.data."
-           write(204,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in train.data."
+           write(*,'(a30,i4,i8,a27)')"Error! unknown status. IOSTAT=",ios,counter,"th structure in train.data."
+           write(204,'(a30,i4,i8,a27)')"Error! unknown status. IOSTAT=",ios,counter,"th structure in train.data."
            stop ! exit program
         end if
      end do
@@ -537,8 +538,8 @@ program maketrain
               end if
               write(203,*) ! linefeed
            else if (ios .ne. -1) then
-              write(*,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
-              write(204,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
+              write(*,'(a30,i4,i8,a26)')"Error! unknown status. IOSTAT=",ios,counter,"th structure in test.data."
+              write(204,'(a30,i4,i8,a26)')"Error! unknown status. IOSTAT=",ios,counter,"th structure in test.data."
               stop ! exit program          
            end if
         end do
@@ -580,7 +581,7 @@ program maketrain
      
      open(202,file='tmptest.data',form='formatted',status='old')
      open(203,file='test.data',form='formatted',status='replace')
-     open(205, file='monitor.data',form='formatted',position='append')
+     !open(205, file='monitor.data',form='formatted',position='append')
      ! test.data
      counter=0
      do while (.not. IS_IOSTAT_END(ios))
@@ -596,8 +597,8 @@ program maketrain
            end if
            write(203,*) ! linefeed
         else if (ios .ne. -1) then
-           write(*,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
-           write(205,'(a,i4,a,i8,a)')"Error! unknown status of IO (IOSTAT=",ios,") when reading the ",counter,"th structure in test.data."
+           write(*,'(a30,i4,i8,a26)')"Error! unknown status. IOSTAT=",ios,counter,"th structure in test.data."
+           write(205,'(a30,i4,i8,a26)')"Error! unknown status. IOSTAT=",ios,counter,"th structure in test.data."
            stop ! exit program          
         end if
      end do
@@ -645,23 +646,44 @@ subroutine structure2process(numprocs, myid, structures, counts, displs)
   ! ensure the array of distribution
   quotient=tnatom/numprocs
   
-  do i=1,structures
+  !do i=1,structures
+  !   natom=natom+atom(i)
+  !   if ((natom .le. quotient) .and. &
+  !        (natom+atom(i+1) .gt. quotient)) then ! reaches the boundary
+  !      p=p+1
+  !      if (p .eq. 1) then
+  !         tmpdispls(p,:)=[1,i]
+  !      elseif (p .lt. numprocs) then
+  !         tmpdispls(p,:)=[tmpdispls(p-1,2)+1,i]
+  !      end if
+  !      natom=0
+  !      counts(p)=tmpdispls(p,2)+1-tmpdispls(p,1)
+  !   end if
+  !end do
+  !tmpdispls(numprocs,:)=[tmpdispls(numprocs-1,2)+1,structures]
+  !counts(numprocs)=tmpdispls(numprocs,2)+1-tmpdispls(numprocs,1)
+  !displs=tmpdispls(myid+1,:)
+
+  do i=1,structures-1
      natom=natom+atom(i)
      if ((natom .le. quotient) .and. &
           (natom+atom(i+1) .gt. quotient)) then ! reaches the boundary
         p=p+1
         if (p .eq. 1) then
            tmpdispls(p,:)=[1,i]
+           counts(p)=tmpdispls(p,2)+1-tmpdispls(p,1)
         elseif (p .lt. numprocs) then
            tmpdispls(p,:)=[tmpdispls(p-1,2)+1,i]
+           counts(p)=tmpdispls(p,2)+1-tmpdispls(p,1)
         end if
         natom=0
-        counts(p)=tmpdispls(p,2)+1-tmpdispls(p,1)
+        
      end if
   end do
   tmpdispls(numprocs,:)=[tmpdispls(numprocs-1,2)+1,structures]
   counts(numprocs)=tmpdispls(numprocs,2)+1-tmpdispls(numprocs,1)
   displs=tmpdispls(myid+1,:)
+  
   
 end subroutine structure2process
 
