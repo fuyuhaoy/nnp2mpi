@@ -183,8 +183,6 @@ program maketrain
   
   call structure2process(numprocs, myid, structures, counts, displs)
 
-  write(*,'(a,i4,a,2i4)')"myid", myid, " -> ", displs(:)
-  
   ! parallel calculation of symmetry function 
   open(20,file='input.data',form='formatted',status='old')
   open(24,file='temp.data',form='formatted',status='old')
